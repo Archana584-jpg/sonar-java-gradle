@@ -86,7 +86,7 @@ pipeline {
                                 ./gradlew test jacocoTestReport sonar \
                                     -Dsonar.projectKey='"${SONAR_PROJECT}"' \
                                     -Dsonar.host.url="$SONAR_HOST_URL" \
-                                    -Dsonar.login="$SONAR_AUTH_TOKEN" \
+                                    -Dsonar.token="$SONAR_AUTH_TOKEN" \
                                     -Dsonar.coverage.jacoco.xmlReportPaths=build/reports/jacoco/test/jacocoTestReport.xml
                             '
                     '''
@@ -111,19 +111,25 @@ pipeline {
                     sh '''
                         curl -s "${SONAR_HOST_URL}/api/measures/component?component=${SONAR_PROJECT}&metricKeys=bugs,vulnerabilities,code_smells,coverage,reliability_rating,security_rating,sqale_rating" \
                             -o sonar-report.json
-                        cat sonar-report.json | jq . || cat sonar-report.json
+                        cat sonar-report.json
+                        jq -r '.component.measures[] | "\\(.metric)=\\(.value)"' sonar-report.json > measures.properties
+                        cat measures.properties
                     '''
                     script {
-                        def report = readJSON file: 'sonar-report.json'
+                        def props = readFile('measures.properties').trim()
                         def measures = [:]
-                        report.component.measures.each { m -> measures[m.metric] = m.value }
-
-                        env.REPORT_BUGS          = measures['bugs'] ?: 'N/A'
-                        env.REPORT_VULNS         = measures['vulnerabilities'] ?: 'N/A'
-                        env.REPORT_SMELLS        = measures['code_smells'] ?: 'N/A'
-                        env.REPORT_COVERAGE      = measures['coverage'] ?: 'N/A'
-                        env.REPORT_RELIABILITY   = measures['reliability_rating'] ?: 'N/A'
-                        env.REPORT_SECURITY      = measures['security_rating'] ?: 'N/A'
+                        props.split('\n').each { line ->
+                            if (line.contains('=')) {
+                                def parts = line.split('=', 2)
+                                measures[parts[0]] = parts[1]
+                            }
+                        }
+                        env.REPORT_BUGS            = measures['bugs'] ?: 'N/A'
+                        env.REPORT_VULNS           = measures['vulnerabilities'] ?: 'N/A'
+                        env.REPORT_SMELLS          = measures['code_smells'] ?: 'N/A'
+                        env.REPORT_COVERAGE        = measures['coverage'] ?: 'N/A'
+                        env.REPORT_RELIABILITY     = measures['reliability_rating'] ?: 'N/A'
+                        env.REPORT_SECURITY        = measures['security_rating'] ?: 'N/A'
                         env.REPORT_MAINTAINABILITY = measures['sqale_rating'] ?: 'N/A'
                     }
                 }
