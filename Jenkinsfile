@@ -85,6 +85,7 @@ pipeline {
                                 chmod +x gradlew
                                 ./gradlew test jacocoTestReport sonar \
                                     -Dsonar.projectKey='"${SONAR_PROJECT}"' \
+                                    -Dsonar.projectName='"${SONAR_PROJECT}"' \
                                     -Dsonar.host.url="$SONAR_HOST_URL" \
                                     -Dsonar.token="$SONAR_AUTH_TOKEN" \
                                     -Dsonar.coverage.jacoco.xmlReportPaths=build/reports/jacoco/test/jacocoTestReport.xml
@@ -112,7 +113,7 @@ pipeline {
                         curl -s "${SONAR_HOST_URL}/api/measures/component?component=${SONAR_PROJECT}&metricKeys=bugs,vulnerabilities,code_smells,coverage,reliability_rating,security_rating,sqale_rating" \
                             -o sonar-report.json
                         cat sonar-report.json
-                        jq -r '.component.measures[] | "\\(.metric)=\\(.value)"' sonar-report.json > measures.properties
+                        jq -r '.component.measures[] | "\(.metric)=\(.value)"' sonar-report.json > measures.properties
                         cat measures.properties
                     '''
                     script {
