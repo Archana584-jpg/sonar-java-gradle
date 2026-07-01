@@ -113,7 +113,10 @@ pipeline {
                         curl -s "${SONAR_HOST_URL}/api/measures/component?component=${SONAR_PROJECT}&metricKeys=bugs,vulnerabilities,code_smells,coverage,reliability_rating,security_rating,sqale_rating" \
                             -o sonar-report.json
                         cat sonar-report.json
-                        jq -r '.component.measures[] | "\(.metric)=\(.value)"' sonar-report.json > measures.properties
+                        jq -r '.component.measures[] | "\\(.metric)=\\(.value)"' sonar-report.json > measures.properties
+                        echo "----- measures.properties content -----"
+                        cat measures.properties
+                        echo "----------------------------------------"
                         cat measures.properties
                     '''
                     script {
