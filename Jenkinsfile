@@ -9,8 +9,8 @@ pipeline {
 
         DOCKER_IMAGE = 'sonar-java-gradle-builder:latest'
 
-        SONARQUBE_SERVER_NAME = 'SonarQubeServer'   // must match Manage Jenkins > SonarQube servers
-        SONAR_URL_CREDENTIAL  = 'sonar-admin-token' // Sonar token w/ project admin rights (create/delete)
+        SONARQUBE_SERVER_NAME = 'sonarqube'   // must match Manage Jenkins > SonarQube servers
+        SONAR_URL_CREDENTIAL  = 'sonar-token' // Sonar token w/ project admin rights (create/delete)
 
         RECIPIENTS = 'archana.rana@ongrid.in'
     }
