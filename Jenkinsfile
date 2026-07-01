@@ -83,7 +83,7 @@ pipeline {
                             bash -c '
                                 set -e
                                 chmod +x gradlew
-                                ./gradlew test jacocoTestReport sonarqube \
+                                ./gradlew test jacocoTestReport sonar \
                                     -Dsonar.projectKey='"${SONAR_PROJECT}"' \
                                     -Dsonar.host.url="$SONAR_HOST_URL" \
                                     -Dsonar.login="$SONAR_AUTH_TOKEN" \
