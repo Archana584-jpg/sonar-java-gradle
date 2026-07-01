@@ -13,6 +13,12 @@ pipeline {
         SONAR_URL_CREDENTIAL  = 'sonar-token' // Sonar token w/ project admin rights (create/delete)
 
         RECIPIENTS = 'archana.rana@ongrid.in'
+
+        // Real host-side path corresponding to /var/jenkins_home inside the
+        // Jenkins container. Confirm via:
+        //   docker inspect jenkins --format '{{json .Mounts}}'
+        // and update this if it differs.
+        JENKINS_HOME_HOST = '/var/lib/docker/volumes/jenkins_jenkins_home/_data'
     }
 
     stages {
@@ -24,8 +30,17 @@ pipeline {
                     // Sanitize branch name into a safe Sonar project key suffix
                     env.SAFE_BRANCH   = env.BRANCH_NAME.replaceAll('[^a-zA-Z0-9_-]', '-')
                     env.SONAR_PROJECT = "sonar-java-gradle-${env.SAFE_BRANCH}"
-                    echo "Branch        : ${env.BRANCH_NAME}"
-                    echo "Sonar Project : ${env.SONAR_PROJECT}"
+
+                    // Translate the in-container workspace path to the real
+                    // host-side path, since "docker run" here talks to the
+                    // HOST's daemon (DooD) — $(pwd) inside this container
+                    // would be meaningless to it.
+                    env.HOST_WORKSPACE = env.WORKSPACE.replace('/var/jenkins_home', env.JENKINS_HOME_HOST)
+
+                    echo "Branch               : ${env.BRANCH_NAME}"
+                    echo "Sonar Project        : ${env.SONAR_PROJECT}"
+                    echo "Container WORKSPACE  : ${env.WORKSPACE}"
+                    echo "Host-side WORKSPACE  : ${env.HOST_WORKSPACE}"
                 }
             }
         }
@@ -60,7 +75,7 @@ pipeline {
                 withSonarQubeEnv("${SONARQUBE_SERVER_NAME}") {
                     sh '''
                         docker run --rm \
-                            -v "$(pwd)":/workspace \
+                            -v "${HOST_WORKSPACE}":/workspace \
                             -w /workspace/${APP_DIR} \
                             -e SONAR_HOST_URL="${SONAR_HOST_URL}" \
                             -e SONAR_AUTH_TOKEN="${SONAR_AUTH_TOKEN}" \
