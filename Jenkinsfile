@@ -65,6 +65,24 @@ pipeline {
         stage('Test, Coverage & Sonar Scan') {
             steps {
                 withSonarQubeEnv("${SONARQUBE_SERVER_NAME}") {
+                    script {
+                        env.SONAR_INCLUSIONS_ARG = ''
+                        if (env.CHANGE_ID) {
+                            sh "git fetch origin ${env.CHANGE_TARGET} || true"
+                            def changedFiles = sh(
+                                script: "git diff --name-only origin/${env.CHANGE_TARGET}...HEAD -- complete/ | sed 's|^complete/||' | tr '\\n' ',' | sed 's/,\$//'",
+                                returnStdout: true
+                            ).trim()
+                            echo "Changed files (PR-scoped): ${changedFiles}"
+                            if (changedFiles) {
+                                env.SONAR_INCLUSIONS_ARG = "-Dsonar.inclusions=${changedFiles}"
+                            } else {
+                                echo "No changed files detected under complete/ — falling back to full scan."
+                            }
+                        } else {
+                            echo "Not a PR build — running full scan (no inclusions filter)."
+                        }
+                    }
                     sh '''
                         docker run --rm \
                             -v "${HOST_WORKSPACE}":/workspace \
@@ -78,6 +96,7 @@ pipeline {
                                 ./gradlew test jacocoTestReport sonar \
                                     -Dsonar.projectKey='"${SONAR_PROJECT}"' \
                                     -Dsonar.projectName='"${SONAR_PROJECT}"' \
+                                    '"${SONAR_INCLUSIONS_ARG}"' \
                                     -Dsonar.host.url="$SONAR_HOST_URL" \
                                     -Dsonar.token="$SONAR_AUTH_TOKEN" \
                                     -Dsonar.coverage.jacoco.xmlReportPaths=build/reports/jacoco/test/jacocoTestReport.xml
