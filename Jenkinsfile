@@ -27,19 +27,13 @@ pipeline {
             steps {
                 checkout scm
                 script {
-                    // Sanitize branch name into a safe Sonar project key suffix
                     env.SAFE_BRANCH   = env.BRANCH_NAME.replaceAll('[^a-zA-Z0-9_-]', '-')
                     env.SONAR_PROJECT = "sonar-java-gradle-${env.SAFE_BRANCH}"
-
-                    // Translate the in-container workspace path to the real
-                    // host-side path, since "docker run" here talks to the
-                    // HOST's daemon (DooD) — $(pwd) inside this container
-                    // would be meaningless to it.
                     env.HOST_WORKSPACE = env.WORKSPACE.replace('/var/jenkins_home', env.JENKINS_HOME_HOST)
 
                     echo "Branch               : ${env.BRANCH_NAME}"
                     echo "Sonar Project        : ${env.SONAR_PROJECT}"
-                    echo "Container WORKSPACE  : ${env.WORKSPACE}"
+                    echo "Is Pull Request      : ${env.CHANGE_ID ? 'Yes (PR #' + env.CHANGE_ID + ' -> ' + env.CHANGE_TARGET + ')' : 'No'}"
                     echo "Host-side WORKSPACE  : ${env.HOST_WORKSPACE}"
                 }
             }
@@ -62,8 +56,6 @@ pipeline {
                                 "${SONAR_HOST_URL}/api/projects/create" \
                                 -d "project=${SONAR_PROJECT}&name=${SONAR_PROJECT}" \
                                 || true
-                            # "|| true" because this returns an error if the project
-                            # already exists — that's expected on every build after the first.
                         '''
                     }
                 }
@@ -95,7 +87,11 @@ pipeline {
             }
         }
 
-        stage('Quality Gate') {
+        // NOTE: this stage only *records* the gate status — it deliberately
+        // does not fail the build. The report must be fetched and the email
+        // sent regardless of pass/fail, otherwise a failing PR would produce
+        // no notification at all, which defeats the purpose.
+        stage('Check Quality Gate Status') {
             steps {
                 timeout(time: 10, unit: 'MINUTES') {
                     script {
@@ -106,18 +102,17 @@ pipeline {
             }
         }
 
-        stage('Fetch Report & Notify') {
+        stage('Fetch Report') {
             steps {
                 withSonarQubeEnv("${SONARQUBE_SERVER_NAME}") {
                     sh '''
-                        curl -s "${SONAR_HOST_URL}/api/measures/component?component=${SONAR_PROJECT}&metricKeys=bugs,vulnerabilities,code_smells,coverage,reliability_rating,security_rating,sqale_rating" \
+                        curl -s -u "${SONAR_AUTH_TOKEN}:" "${SONAR_HOST_URL}/api/measures/component?component=${SONAR_PROJECT}&metricKeys=bugs,vulnerabilities,code_smells,coverage,reliability_rating,security_rating,sqale_rating" \
                             -o sonar-report.json
                         cat sonar-report.json
                         jq -r '.component.measures[] | "\\(.metric)=\\(.value)"' sonar-report.json > measures.properties
                         echo "----- measures.properties content -----"
                         cat measures.properties
                         echo "----------------------------------------"
-                        cat measures.properties
                     '''
                     script {
                         def props = readFile('measures.properties').trim()
@@ -140,63 +135,71 @@ pipeline {
                 archiveArtifacts artifacts: 'sonar-report.json', allowEmptyArchive: true
             }
         }
+
+        stage('Notify') {
+            steps {
+                script {
+                    def isPR         = env.CHANGE_ID != null
+                    def gatePassed   = (env.QUALITY_GATE_STATUS == 'OK')
+                    def verdictText  = gatePassed ? '✅ SAFE TO MERGE' : '❌ DO NOT MERGE'
+                    def verdictColor = gatePassed ? '#1a7f37' : '#cf222e'
+
+                    def prInfoRows = isPR ? """
+                        <tr><td><b>Pull Request</b></td><td>#${env.CHANGE_ID}: ${env.CHANGE_TITLE ?: ''}</td></tr>
+                        <tr><td><b>Source → Target</b></td><td>${env.CHANGE_BRANCH} → ${env.CHANGE_TARGET}</td></tr>
+                        <tr><td><b>PR Link</b></td><td><a href="${env.CHANGE_URL}">${env.CHANGE_URL}</a></td></tr>
+                    """ : """
+                        <tr><td><b>Branch</b></td><td>${env.BRANCH_NAME}</td></tr>
+                    """
+
+                    def subjectPrefix = isPR ? "PR #${env.CHANGE_ID}" : env.BRANCH_NAME
+
+                    emailext(
+                        to: "${RECIPIENTS}",
+                        subject: "${gatePassed ? '✅' : '❌'} ${subjectPrefix} — ${env.SONAR_PROJECT} — ${verdictText}",
+                        mimeType: 'text/html',
+                        body: """
+                            <h2 style="color:${verdictColor};">${verdictText}</h2>
+                            <h3>SonarQube Scan Report</h3>
+                            <table cellpadding="6" style="border-collapse:collapse;">
+                              ${prInfoRows}
+                              <tr><td><b>Sonar Project</b></td><td>${env.SONAR_PROJECT}</td></tr>
+                              <tr><td><b>Quality Gate</b></td><td>${env.QUALITY_GATE_STATUS}</td></tr>
+                              <tr><td><b>Bugs</b></td><td>${env.REPORT_BUGS}</td></tr>
+                              <tr><td><b>Vulnerabilities</b></td><td>${env.REPORT_VULNS}</td></tr>
+                              <tr><td><b>Code Smells</b></td><td>${env.REPORT_SMELLS}</td></tr>
+                              <tr><td><b>Coverage</b></td><td>${env.REPORT_COVERAGE}%</td></tr>
+                              <tr><td><b>Reliability Rating</b></td><td>${env.REPORT_RELIABILITY}</td></tr>
+                              <tr><td><b>Security Rating</b></td><td>${env.REPORT_SECURITY}</td></tr>
+                              <tr><td><b>Maintainability Rating</b></td><td>${env.REPORT_MAINTAINABILITY}</td></tr>
+                              <tr><td><b>SonarQube Dashboard</b></td><td><a href="${SONAR_HOST_URL}/dashboard?id=${env.SONAR_PROJECT}">View full report</a></td></tr>
+                              <tr><td><b>Jenkins Build</b></td><td><a href="${env.BUILD_URL}">${env.BUILD_URL}</a></td></tr>
+                            </table>
+                        """
+                    )
+
+                    if (isPR) {
+                        githubNotify context: 'sonarqube/quality-gate',
+                            description: "Quality Gate: ${env.QUALITY_GATE_STATUS} — ${verdictText}",
+                            status: (gatePassed ? 'SUCCESS' : 'FAILURE'),
+                            targetUrl: env.BUILD_URL
+                    }
+                }
+            }
+        }
+
+        stage('Enforce Quality Gate') {
+            steps {
+                script {
+                    if (env.QUALITY_GATE_STATUS != 'OK') {
+                        error("Quality Gate failed with status: ${env.QUALITY_GATE_STATUS}. See emailed report for details.")
+                    }
+                }
+            }
+        }
     }
 
     post {
-
-        success {
-            script {
-                if (env.CHANGE_ID) {
-                    githubNotify context: 'sonarqube/quality-gate',
-                        description: "Quality Gate: ${env.QUALITY_GATE_STATUS}",
-                        status: (env.QUALITY_GATE_STATUS == 'OK' ? 'SUCCESS' : 'FAILURE'),
-                        targetUrl: env.BUILD_URL
-                }
-            }
-            emailext(
-                to: "${RECIPIENTS}",
-                subject: "SonarQube Report — ${env.SONAR_PROJECT} (${env.QUALITY_GATE_STATUS})",
-                mimeType: 'text/html',
-                body: """
-                    <h3>SonarQube Scan Report</h3>
-                    <table cellpadding="6" style="border-collapse:collapse;">
-                      <tr><td><b>Branch</b></td><td>${env.BRANCH_NAME}</td></tr>
-                      <tr><td><b>Sonar Project</b></td><td>${env.SONAR_PROJECT}</td></tr>
-                      <tr><td><b>Quality Gate</b></td><td>${env.QUALITY_GATE_STATUS}</td></tr>
-                      <tr><td><b>Bugs</b></td><td>${env.REPORT_BUGS}</td></tr>
-                      <tr><td><b>Vulnerabilities</b></td><td>${env.REPORT_VULNS}</td></tr>
-                      <tr><td><b>Code Smells</b></td><td>${env.REPORT_SMELLS}</td></tr>
-                      <tr><td><b>Coverage</b></td><td>${env.REPORT_COVERAGE}%</td></tr>
-                      <tr><td><b>Reliability Rating</b></td><td>${env.REPORT_RELIABILITY}</td></tr>
-                      <tr><td><b>Security Rating</b></td><td>${env.REPORT_SECURITY}</td></tr>
-                      <tr><td><b>Maintainability Rating</b></td><td>${env.REPORT_MAINTAINABILITY}</td></tr>
-                      <tr><td><b>Build</b></td><td><a href="${env.BUILD_URL}">${env.BUILD_URL}</a></td></tr>
-                    </table>
-                """
-            )
-        }
-
-        failure {
-            script {
-                if (env.CHANGE_ID) {
-                    githubNotify context: 'sonarqube/quality-gate',
-                        description: 'Build or Quality Gate failed',
-                        status: 'FAILURE',
-                        targetUrl: env.BUILD_URL
-                }
-            }
-            emailext(
-                to: "${RECIPIENTS}",
-                subject: "❌ SonarQube Scan Failed — ${env.SONAR_PROJECT}",
-                mimeType: 'text/html',
-                body: """
-                    <h3 style="color:#cf222e;">Scan Failed</h3>
-                    <p>Branch: ${env.BRANCH_NAME}</p>
-                    <p>Check console log: <a href="${env.BUILD_URL}console">${env.BUILD_URL}console</a></p>
-                """
-            )
-        }
-
         always {
             cleanWs()
         }
