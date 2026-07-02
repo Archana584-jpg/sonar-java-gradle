@@ -56,6 +56,15 @@ pipeline {
                                 "${SONAR_HOST_URL}/api/projects/create" \
                                 -d "project=${SONAR_PROJECT}&name=${SONAR_PROJECT}" \
                                 || true
+
+                            # Define "New Code" as everything added since this
+                            # project's first analysis (~30 day window covers
+                            # a typical PR lifetime). This is what powers the
+                            # New Code vs Overall Code split in reports below.
+                            curl -s -u "${SONAR_ADMIN_TOKEN}:" -X POST \
+                                "${SONAR_HOST_URL}/api/new_code_periods/set" \
+                                -d "project=${SONAR_PROJECT}&type=NUMBER_OF_DAYS&value=30" \
+                                || true
                         '''
                     }
                 }
@@ -125,10 +134,10 @@ pipeline {
             steps {
                 withSonarQubeEnv("${SONARQUBE_SERVER_NAME}") {
                     sh '''
-                        curl -s -u "${SONAR_AUTH_TOKEN}:" "${SONAR_HOST_URL}/api/measures/component?component=${SONAR_PROJECT}&metricKeys=bugs,vulnerabilities,code_smells,coverage,reliability_rating,security_rating,sqale_rating" \
+                        curl -s -u "${SONAR_AUTH_TOKEN}:" "${SONAR_HOST_URL}/api/measures/component?component=${SONAR_PROJECT}&metricKeys=bugs,vulnerabilities,code_smells,coverage,reliability_rating,security_rating,sqale_rating,new_bugs,new_vulnerabilities,new_code_smells,new_coverage,new_reliability_rating,new_security_rating,new_maintainability_rating" \
                             -o sonar-report.json
                         cat sonar-report.json
-                        jq -r '.component.measures[] | "\\(.metric)=\\(.value)"' sonar-report.json > measures.properties
+                        jq -r '.component.measures[] | "\\(.metric)=\\(.value // .period.value // "N/A")"' sonar-report.json > measures.properties
                         echo "----- measures.properties content -----"
                         cat measures.properties
                         echo "----------------------------------------"
@@ -149,6 +158,15 @@ pipeline {
                         env.REPORT_RELIABILITY     = measures['reliability_rating'] ?: 'N/A'
                         env.REPORT_SECURITY        = measures['security_rating'] ?: 'N/A'
                         env.REPORT_MAINTAINABILITY = measures['sqale_rating'] ?: 'N/A'
+
+                        // New Code (this PR/branch only, since project creation)
+                        env.NEW_BUGS            = measures['new_bugs'] ?: 'N/A'
+                        env.NEW_VULNS           = measures['new_vulnerabilities'] ?: 'N/A'
+                        env.NEW_SMELLS          = measures['new_code_smells'] ?: 'N/A'
+                        env.NEW_COVERAGE        = measures['new_coverage'] ?: 'N/A'
+                        env.NEW_RELIABILITY     = measures['new_reliability_rating'] ?: 'N/A'
+                        env.NEW_SECURITY        = measures['new_security_rating'] ?: 'N/A'
+                        env.NEW_MAINTAINABILITY = measures['new_maintainability_rating'] ?: 'N/A'
 
                         // Capture this now while still inside withSonarQubeEnv —
                         // SONAR_HOST_URL isn't accessible outside that block's scope.
@@ -188,6 +206,21 @@ pipeline {
                               ${prInfoRows}
                               <tr><td><b>Sonar Project</b></td><td>${env.SONAR_PROJECT}</td></tr>
                               <tr><td><b>Quality Gate</b></td><td>${env.QUALITY_GATE_STATUS}</td></tr>
+                            </table>
+
+                            <h3 style="margin-top:24px;">New Code (this PR)</h3>
+                            <table cellpadding="6" style="border-collapse:collapse;">
+                              <tr><td><b>Bugs</b></td><td>${env.NEW_BUGS}</td></tr>
+                              <tr><td><b>Vulnerabilities</b></td><td>${env.NEW_VULNS}</td></tr>
+                              <tr><td><b>Code Smells</b></td><td>${env.NEW_SMELLS}</td></tr>
+                              <tr><td><b>Coverage</b></td><td>${env.NEW_COVERAGE}%</td></tr>
+                              <tr><td><b>Reliability Rating</b></td><td>${env.NEW_RELIABILITY}</td></tr>
+                              <tr><td><b>Security Rating</b></td><td>${env.NEW_SECURITY}</td></tr>
+                              <tr><td><b>Maintainability Rating</b></td><td>${env.NEW_MAINTAINABILITY}</td></tr>
+                            </table>
+
+                            <h3 style="margin-top:24px;">Full Project (Old + New Code)</h3>
+                            <table cellpadding="6" style="border-collapse:collapse;">
                               <tr><td><b>Bugs</b></td><td>${env.REPORT_BUGS}</td></tr>
                               <tr><td><b>Vulnerabilities</b></td><td>${env.REPORT_VULNS}</td></tr>
                               <tr><td><b>Code Smells</b></td><td>${env.REPORT_SMELLS}</td></tr>
