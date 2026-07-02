@@ -130,6 +130,10 @@ pipeline {
                         env.REPORT_RELIABILITY     = measures['reliability_rating'] ?: 'N/A'
                         env.REPORT_SECURITY        = measures['security_rating'] ?: 'N/A'
                         env.REPORT_MAINTAINABILITY = measures['sqale_rating'] ?: 'N/A'
+
+                        // Capture this now while still inside withSonarQubeEnv —
+                        // SONAR_HOST_URL isn't accessible outside that block's scope.
+                        env.SONAR_DASHBOARD_URL = "${SONAR_HOST_URL}/dashboard?id=${env.SONAR_PROJECT}"
                     }
                 }
                 archiveArtifacts artifacts: 'sonar-report.json', allowEmptyArchive: true
@@ -172,7 +176,7 @@ pipeline {
                               <tr><td><b>Reliability Rating</b></td><td>${env.REPORT_RELIABILITY}</td></tr>
                               <tr><td><b>Security Rating</b></td><td>${env.REPORT_SECURITY}</td></tr>
                               <tr><td><b>Maintainability Rating</b></td><td>${env.REPORT_MAINTAINABILITY}</td></tr>
-                              <tr><td><b>SonarQube Dashboard</b></td><td><a href="${SONAR_HOST_URL}/dashboard?id=${env.SONAR_PROJECT}">View full report</a></td></tr>
+                              <tr><td><b>SonarQube Dashboard</b></td><td><a href="${env.SONAR_DASHBOARD_URL}">View full report</a></td></tr>
                               <tr><td><b>Jenkins Build</b></td><td><a href="${env.BUILD_URL}">${env.BUILD_URL}</a></td></tr>
                             </table>
                         """
