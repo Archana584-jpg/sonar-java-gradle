@@ -171,6 +171,7 @@ pipeline {
                         // Capture this now while still inside withSonarQubeEnv —
                         // SONAR_HOST_URL isn't accessible outside that block's scope.
                         env.SONAR_DASHBOARD_URL = "${SONAR_HOST_URL}/dashboard?id=${env.SONAR_PROJECT}"
+                        env.SONAR_NEW_CODE_URL  = "${SONAR_HOST_URL}/project/issues?id=${env.SONAR_PROJECT}&inNewCodePeriod=true"
                     }
                 }
                 archiveArtifacts artifacts: 'sonar-report.json', allowEmptyArchive: true
@@ -185,13 +186,24 @@ pipeline {
                     def verdictText  = gatePassed ? '✅ SAFE TO MERGE' : '❌ DO NOT MERGE'
                     def verdictColor = gatePassed ? '#1a7f37' : '#cf222e'
 
-                    def prInfoRows = isPR ? """
-                        <tr><td><b>Pull Request</b></td><td>#${env.CHANGE_ID}: ${env.CHANGE_TITLE ?: ''}</td></tr>
-                        <tr><td><b>Source → Target</b></td><td>${env.CHANGE_BRANCH} → ${env.CHANGE_TARGET}</td></tr>
-                        <tr><td><b>PR Link</b></td><td><a href="${env.CHANGE_URL}">${env.CHANGE_URL}</a></td></tr>
-                    """ : """
-                        <tr><td><b>Branch</b></td><td>${env.BRANCH_NAME}</td></tr>
-                    """
+                    def prInfoRows
+                    if (isPR) {
+                        prInfoRows = """
+                            <tr><td><b>Raised By</b></td><td>${env.CHANGE_AUTHOR ?: 'Unknown'} (${env.CHANGE_AUTHOR_EMAIL ?: 'no email'})</td></tr>
+                            <tr><td><b>Pull Request</b></td><td>#${env.CHANGE_ID}: ${env.CHANGE_TITLE ?: ''}</td></tr>
+                            <tr><td><b>Merging</b></td><td><b>${env.CHANGE_BRANCH}</b> → <b>${env.CHANGE_TARGET}</b></td></tr>
+                            <tr><td><b>PR Link</b></td><td><a href="${env.CHANGE_URL}">${env.CHANGE_URL}</a></td></tr>
+                        """
+                    } else {
+                        def lastCommitAuthor = sh(
+                            script: "git log -1 --pretty=format:'%an <%ae>'",
+                            returnStdout: true
+                        ).trim()
+                        prInfoRows = """
+                            <tr><td><b>Pushed By</b></td><td>${lastCommitAuthor}</td></tr>
+                            <tr><td><b>Branch</b></td><td>${env.BRANCH_NAME}</td></tr>
+                        """
+                    }
 
                     def subjectPrefix = isPR ? "PR #${env.CHANGE_ID}" : env.BRANCH_NAME
 
@@ -217,6 +229,7 @@ pipeline {
                               <tr><td><b>Reliability Rating</b></td><td>${env.NEW_RELIABILITY}</td></tr>
                               <tr><td><b>Security Rating</b></td><td>${env.NEW_SECURITY}</td></tr>
                               <tr><td><b>Maintainability Rating</b></td><td>${env.NEW_MAINTAINABILITY}</td></tr>
+                              <tr><td><b>New Code Details</b></td><td><a href="${env.SONAR_NEW_CODE_URL}">View new code issues</a></td></tr>
                             </table>
 
                             <h3 style="margin-top:24px;">Full Project (Old + New Code)</h3>
